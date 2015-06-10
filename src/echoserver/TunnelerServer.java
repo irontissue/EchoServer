@@ -7,23 +7,23 @@ import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.HashMap;
+import java.util.HashSet;
 
 public class TunnelerServer {
     private static final int PORT = 8888;
     
     private static HashMap<String, Tank> tanks = new HashMap();
+    
+    private static HashSet<Handler> connections = new HashSet();
 
     public static void main(String[] args) throws Exception {
-        System.out.println("The tunneler server is running.");
+        System.out.println("The tunneler server is running on port "+PORT+".");
         ServerSocket listener = new ServerSocket(PORT);
         try {
             while (true) {
-                for(Tank t : tanks.values())
-                {
-                    if(t != null)
-                        t.update();
-                }
-                new Handler(listener.accept()).start();
+                Handler h = new Handler(listener.accept());
+                h.start();
+                connections.add(h);
             }
         } finally {
             listener.close();
@@ -34,8 +34,9 @@ public class TunnelerServer {
         private String name;
         private Socket socket;
         private BufferedReader in;
-        private PrintWriter out;
+        public PrintWriter out;
         private long pushTimer = System.currentTimeMillis();
+        private long frameTimer = System.currentTimeMillis();
 
         public Handler(Socket socket) {
             this.socket = socket;
@@ -61,6 +62,7 @@ public class TunnelerServer {
                         }
                     }
                 }
+                out.println("NAMEACCEPTED");
                 System.out.println("Connection with " + name + " established.");
                 
                 new Thread()
@@ -70,17 +72,29 @@ public class TunnelerServer {
                     {
                         while(true)
                         {
-                            if(System.currentTimeMillis()-pushTimer > 1000)
+                            /*if(System.currentTimeMillis()-pushTimer > 100)
                             {
                                 pushTimer = System.currentTimeMillis();
                                 for(Tank t : tanks.values())
                                 {
                                     if(t != null && !t.getName().equals(name))
                                     {
+                                        //t.update();
+                                    }
+                                }
+                            }*/
+                            while(System.currentTimeMillis()-frameTimer >= 16)
+                            {
+                                frameTimer += 16;
+                                for(Tank t : tanks.values())
+                                {
+                                    if(t != null)
+                                    {
+                                        t.update();
                                         out.println(t.getName() + " " + t.getX() + " " + t.getY() + " " + t.getXSpeed() + " " + t.getYSpeed() + " " + t.getDirection());
                                     }
                                 }
-                            } 
+                            }
                         }
                     }
                 }.start();
@@ -91,14 +105,30 @@ public class TunnelerServer {
                         return;
                     }
                     String[] splitty = input.split(" ");
-                    if(splitty[0].equalsIgnoreCase("pushtank"))
+                    if(splitty[0].equals("PUSHTANK"))
                     {
-                        System.out.println("tank recieved!!11!!1!");
                         Tank t = new Tank(name, Float.parseFloat(splitty[1]), Float.parseFloat(splitty[2]));
-                        t.setXSpeed(Float.parseFloat(splitty[3]));
-                        t.setYSpeed(Float.parseFloat(splitty[4]));
-                        t.setDirection(Integer.parseInt(splitty[5]));
                         tanks.put(name, t);
+                    }
+                    else if(splitty[0].equals("KEYSTROKE"))
+                    {
+                        Tank t = tanks.get(name);
+                        if(splitty[1].equals("RIGHT") || splitty[1].equals("LEFTRELEASED"))
+                        {
+                            t.setXSpeed(t.getXSpeed()+3);
+                        }
+                        else if(splitty[1].equals("LEFT") || splitty[1].equals("RIGHTRELEASED"))
+                        {
+                            t.setXSpeed(t.getXSpeed()-3);
+                        }
+                        else if(splitty[1].equals("UP") || splitty[1].equals("DOWNRELEASED"))
+                        {
+                            t.setYSpeed(t.getYSpeed()+3);
+                        }
+                        else if(splitty[1].equals("DOWN") || splitty[1].equals("UPRELEASED"))
+                        {
+                            t.setYSpeed(t.getYSpeed()-3);
+                        }
                     }
                 }
             } catch (IOException e) {
@@ -106,6 +136,10 @@ public class TunnelerServer {
             } finally {
                 if (name != null) {
                     tanks.remove(name);
+                    for(Handler h : connections)
+                    {
+                        h.out.println("DISCONNECT " + name);
+                    }
                 }
                 try {
                     socket.close();
