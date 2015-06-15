@@ -5,6 +5,9 @@
  */
 package echoserver;
 
+import java.awt.Image;
+import java.awt.Toolkit;
+
 /**
  *
  * @author Ashok
@@ -13,29 +16,32 @@ public class Bullet
 {
     private String name;
     
-    private float x,y,xVel,yVel;
-    private int direction, lifetime; //lifetime in millis
+    public final static double STANDARD_BULLET_SPEED = (1.75*TunnelerServer.FRAME_RATE/1000.0); //pixels per millisecond.
+    public final static int STANDARD_BULLET_LIFETIME = 3000;
     
-    public Bullet(String name, float x, float y)
-    {
-        new Bullet(name, x, y, 0, 0, 0, 3000);
-    }
+    public static Image bulletImage = Toolkit.getDefaultToolkit().getImage("bullet1.png");
     
-    public Bullet(String name, float x, float y, float xSpd, float ySpd, int direction, int lifetime)
+    private double x,y, speed;
+    private double rotation;
+    private int currLifetime = 0, lifetime; //lifetime in millis
+    
+    public Bullet(String name, float x, float y, float speed, double rotation, int lifetime)
     {
         this.name = name;
         this.x = x;
         this.y = y;
-        xVel = xSpd;
-        yVel = ySpd;
-        this.direction = direction;
+        this.rotation = rotation;
         this.lifetime = lifetime;
+        this.speed = speed;
     }
     
-    public void update()
+    public void update(long deltaTime)
     {
-        x += xVel;
-        y += yVel;
+        double xVel = speed*Math.cos(rotation);
+        double yVel = speed*Math.sin(rotation);
+        x += xVel*deltaTime;
+        y += yVel*deltaTime;
+        currLifetime += deltaTime;
     }
     
     public String getName()
@@ -43,48 +49,42 @@ public class Bullet
         return name;
     }
     
-    public float getX()
+    public double getX()
     {
         return x;
     }
     
-    public float getY()
+    public double getY()
     {
         return y;
     }
     
-    public float getDirection()
+    public double getRotation()
     {
-        return direction;
+        return rotation;
     }
     
-    public float getXSpeed()
+    public double getSpeed()
     {
-        return xVel;
+        return speed;
     }
     
-    public float getYSpeed()
+    public void setSpeed(double newSpeed)
     {
-        return yVel;
+        speed = newSpeed;
     }
     
-    public void setSpeed(float xSpd, float ySpd)
+    public void setRotation(double dir)
     {
-        xVel = xSpd;
-        yVel = ySpd;
+        rotation = dir;
     }
     
-    public void setDirection(int dir)
-    {
-        direction = dir;
-    }
-    
-    public void setX(float newX)
+    public void setX(double newX)
     {
         x = newX;
     }
     
-    public void setY(float newY)
+    public void setY(double newY)
     {
         y = newY;
     }
