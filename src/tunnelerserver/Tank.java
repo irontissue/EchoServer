@@ -3,7 +3,7 @@
  * To change this template file, choose Tools | Templates
  * and open the template in the editor.
  */
-package echoserver;
+package tunnelerserver;
 
 import java.awt.Image;
 import java.awt.Toolkit;
@@ -15,6 +15,11 @@ import java.awt.Toolkit;
 public class Tank
 {
     private String name;
+    
+    private int team;
+    private int health;
+    
+    private boolean isDead = false;
     
     public final static double TANK_SPEED = (1.0*TunnelerServer.FRAME_RATE/1000.0); //pixels per millisecond. The first number is pixels/frame.
     public final static double TANK_ROTATION_SPEED = Math.PI/1000; //radians per millisecond
@@ -32,6 +37,7 @@ public class Tank
         this.y = y;
         xVel = 0;
         yVel = 0;
+        health = 500;
     }
     
     public void update(long deltaTime)
@@ -166,6 +172,36 @@ public class Tank
         mockY += myYVel;
         double[] d = {mockX,mockY,mockRotation};
         return d;
+    }
+    
+    public boolean isDead()
+    {
+        return isDead;
+    }
+    
+    public void setDead(boolean dead)
+    {
+        isDead = dead;
+    }
+    
+    public int getHealth()
+    {
+        return health;
+    }
+    
+    public void setHealth(int newHealth)
+    {
+        health = newHealth;
+    }
+    
+    public int getTeam()
+    {
+        return team;
+    }
+    
+    public void setTeam(int team)
+    {
+        this.team = team;
     }
     
     public String getName()
