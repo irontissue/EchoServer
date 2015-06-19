@@ -18,6 +18,7 @@ public class Tank
     
     private int team;
     private int health;
+    public static final int MAX_HEALTH = 500;
     
     private boolean isDead = false;
     

@@ -12,6 +12,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Stack;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class TunnelerServer {
     private static final int PORT = 8888;
@@ -55,7 +57,9 @@ public class TunnelerServer {
         
         private ArrayList<Bullet> bullets = new ArrayList();
 
-        private int[][] grid = new int[2000][2000]; //values in grid represent tile type. 0 is nothing, 1 is diggable dirt, 2 is wall. If value is above 2, there is a bullet there with damage = value/10.
+        private int[][] grid = new int[2000][2000]; //values in grid represent tile type. 0 is nothing, 1 is diggable dirt, 2 is wall.
+                                                    //If value is above 2, there is a bullet there with damage = value/100.
+                                                    //Essentially, a grid value 100 or above means theres damage there.
         
         public Room(int size)
         {
@@ -88,8 +92,13 @@ public class TunnelerServer {
         
         public void startGame()
         {
-            while(handlers.size() != roomSize || tanks.size() != roomSize){System.out.println(handlers.size());}
-            System.out.println(handlers.size());
+            while(handlers.size() != roomSize || tanks.size() != roomSize){
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException ex) {
+                    ex.printStackTrace();
+                }
+            }
             start();
         }
         
@@ -113,6 +122,17 @@ public class TunnelerServer {
             for(Handler hh : handlers.values())
             {
                 hh.out.println("SYSTEMMESSAGE/" + t.getName() + " has joined the game." + msg);
+            }
+            for(int i = (int)(t.getX()-150); i < (int)(t.getX()+150); i++)
+            {
+                for(int j = (int)(t.getY()-150); j < (int)(t.getY()+150); j++)
+                {
+                    if(!h.discoveredGrid[i][j])
+                    {
+                        h.out.println("GRID/" + i + "/" + j + "/" + grid[i][j]);
+                        h.discoveredGrid[i][j] = true;
+                    }
+                }
             }
         }
         
@@ -236,9 +256,16 @@ public class TunnelerServer {
                             else
                             {
                                 Bullet b = bullets.get(u);
-                                grid[(int)b.getX()][(int)b.getY()] -= b.getDamage()*10;
+                                grid[(int)b.getX()][(int)b.getY()] -= b.getDamage()*100;
                                 double[] dat = b.mockUpdate(timeMillis-frameTimer);
-                                int gridType = grid[(int)dat[0]][(int)dat[1]]%10;
+                                int gridType = grid[(int)dat[0]][(int)dat[1]]%100;
+                                /*
+                                2 cases for bullet removal tested here. The third one is in the tanks loop below.
+                                The three cases are 1) bullet hits wall and it doesn't pierce
+                                                    2) bullet's lifetime is over
+                                                    3) bullet hits tank and it doesn't pierce
+                                Cases 1 and 2 are tested here.
+                                */
                                 if(gridType != 0 && !b.piercesWalls)
                                 {
                                     bullets.remove(b);
@@ -252,7 +279,7 @@ public class TunnelerServer {
                                         double randSpd = Math.random()*2*TunnelerServer.FRAME_RATE/1000.0;
                                         double randRotate = Math.random()*Math.PI/2+(b.getRotation()-Math.PI-Math.PI/4);
                                         bullets.add(new Bullet("bullet2", dat[0], dat[1], randSpd, randRotate, 300, 5, true, true));
-                                        grid[(int)dat[0]][(int)dat[1]] += b.getDamage()*5; //ricochet bullets do half dmg
+                                        grid[(int)dat[0]][(int)dat[1]] += b.getDamage()*20; //ricochet bullets do 1/5 dmg
                                         synchronized(handlers.values()){
                                             for(Handler h : handlers.values()){
                                                 h.out.println("BULLET/bullet2/" + dat[0] + "/" + dat[1] + "/" + randSpd + "/" + randRotate + "/" + 300 + "/" + 5 + "/true/true");
@@ -272,7 +299,7 @@ public class TunnelerServer {
                                 else
                                 {
                                     b.update(timeMillis-frameTimer);
-                                    grid[(int)dat[0]][(int)dat[1]] += b.getDamage()*10;
+                                    grid[(int)dat[0]][(int)dat[1]] += b.getDamage()*100;
                                 }
                             }
                         }
@@ -297,7 +324,7 @@ public class TunnelerServer {
                                     //double corner4x = dat[0]-Tank.tankImg.getWidth(null)*Tank.imgScale*Math.cos(angle)/2 + Tank.tankImg.getHeight(null)*Tank.imgScale*Math.sin(angle)/2;
                                     //double corner4y = dat[1]-Tank.tankImg.getWidth(null)*Tank.imgScale*Math.sin(angle)/2 - Tank.tankImg.getHeight(null)*Tank.imgScale*Math.cos(angle)/2;
                                     int radius = (int)(Tank.imgScale*Tank.tankImg.getWidth(null)/2+3);
-                                    double incAdjustment = 1;
+                                    double incAdjustment = 1.0;
                                     double outXInc = Math.cos(angle)*incAdjustment, outYInc = Math.sin(angle)*incAdjustment, inXInc = Math.sin(angle)*incAdjustment, inYInc=-Math.cos(angle)*incAdjustment;
                                     double widthCounter = 0;
                                     boolean canMove = true;
@@ -310,17 +337,18 @@ public class TunnelerServer {
                                             double dist = Math.sqrt(radius*radius-(dat[0]-startX)*(dat[0]-startX));
                                             for(int startY = (int)(dat[1]-dist); startY < (int)(dat[1]+dist); startY++)
                                             {
-                                                if(grid[startX][startY] == 1)
+                                                int type = grid[startX][startY]%100;
+                                                if(type == 1)
                                                 {
                                                     tempBucket.push(new Point(startX, startY));
+                                                    numUnits++;
                                                 }
-                                                else if(grid[startX][startY] == 2)
+                                                else if(type == 2)
                                                 {
                                                     canMove = false;
                                                     tempBucket.clear();
                                                     break;
                                                 }
-                                                numUnits++;
                                             }
                                         }
                                         bucket.addAll(tempBucket);
@@ -333,18 +361,31 @@ public class TunnelerServer {
                                             double qx = corner1x, qy = corner1y;
                                             while(heightCounter < Tank.imgScale*Tank.tankImg.getHeight(null)/incAdjustment+1)
                                             {
-                                                int dmg = grid[(int)Math.round(qx)][(int)Math.round(qy)]/10;
-                                                int gridType = grid[(int)Math.round(qx)][(int)Math.round(qy)]-dmg*10;
-                                                t.setHealth(t.getHealth()-dmg);
-                                                if(gridType != 0 || t.getHealth() <= 0)
+                                                //Third case for bullet removal test, see bullet loop above for explanation
+                                                int dmg = grid[(int)Math.round(qx)][(int)Math.round(qy)]/100;
+                                                int gridType = grid[(int)Math.round(qx)][(int)Math.round(qy)]-dmg*100;
+                                                if(dmg > 0)
                                                 {
-                                                    canMove = false;
-                                                    if(t.getHealth() <= 0)
+                                                    grid[(int)Math.round(qx)][(int)Math.round(qy)] %= 100;
+                                                    for(Bullet b : bullets)
                                                     {
-                                                        deadTanks.add(t);
-                                                        t.setDead(true);
+                                                        if(!b.piercesTanks && b.getX() == (int)Math.round(qx) && b.getY() == (int)Math.round(qy))
+                                                        {
+                                                            bullets.remove(b);
+                                                            break;
+                                                        }
                                                     }
-                                                    break;
+                                                    t.setHealth(t.getHealth()-dmg);
+                                                    if(gridType != 0 || t.getHealth() <= 0)
+                                                    {
+                                                        canMove = false;
+                                                        if(t.getHealth() <= 0)
+                                                        {
+                                                            deadTanks.add(t);
+                                                            t.setDead(true);
+                                                        }
+                                                        break;
+                                                    }
                                                 }
                                                 numUnits++;
                                                 qx += inXInc;
@@ -356,6 +397,7 @@ public class TunnelerServer {
                                             widthCounter++;
                                         }
                                     }
+                                    //System.out.println(numUnits); //Efficiency of above collision algorithms
                                     if(canMove)
                                     {
                                         for(int i = (int)(dat[0]-150); i < (int)(dat[0]+150); i++)
@@ -371,7 +413,6 @@ public class TunnelerServer {
                                         }
                                         t.update(timeMillis-frameTimer);
                                     }
-                                    //System.out.println(numUnits);
                                 } catch(Exception exc) {
                                     exc.printStackTrace();
                                 }
@@ -381,10 +422,12 @@ public class TunnelerServer {
                     }
                     for(Point p : bucket)
                     {
-                        grid[(int)p.getX()][(int)p.getY()] = 0;
+                        grid[(int)p.getX()][(int)p.getY()] /= 100;
+                        grid[(int)p.getX()][(int)p.getY()] *= 100;
+                        int type = grid[(int)p.getX()][(int)p.getY()]%100;
                         for(Handler h : handlers.values())
                         {
-                            h.out.println("GRID/" + (int)p.getX() + "/" + (int)p.getY() + "/" + grid[(int)p.getX()][(int)p.getY()]);
+                            h.out.println("GRID/" + (int)p.getX() + "/" + (int)p.getY() + "/" + type);
                         }
                     }
                     for(Tank t : deadTanks)
@@ -556,7 +599,7 @@ public class TunnelerServer {
                                     {
                                         myRoom.bullets.add(new Bullet("bullet1 "+name, t.getX()+Math.cos(t.getRotation())*15, t.getY()+Math.sin(t.getRotation())*15, Bullet.STANDARD_BULLET_SPEED, t.getRotation(), Bullet.STANDARD_BULLET_LIFETIME, 10, false, false));
                                         numBullets += 1;
-                                        myRoom.grid[(int)(t.getX()+Math.cos(t.getRotation())*15)][(int)(t.getY()+Math.sin(t.getRotation())*15)] += 100;
+                                        myRoom.grid[(int)(t.getX()+Math.cos(t.getRotation())*15)][(int)(t.getY()+Math.sin(t.getRotation())*15)] += 1000;
                                         synchronized(myRoom.handlers.values()){
                                             for(Handler h : myRoom.handlers.values()){
                                                 h.out.println("BULLET/bullet1 " +name+ "/" + (t.getX()+Math.cos(t.getRotation())*15) + "/" + (t.getY()+Math.sin(t.getRotation())*15) + "/" + Bullet.STANDARD_BULLET_SPEED + "/" + t.getRotation() + "/" + Bullet.STANDARD_BULLET_LIFETIME + "/" + 10 + "/false/false");
