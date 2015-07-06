@@ -16,7 +16,7 @@ public class Bullet
 {
     private String name;
     
-    public final static float STANDARD_BULLET_SPEED = (float) (1.75*TunnelerServer.FRAME_RATE/1000.0); //pixels per millisecond. First number is pixels/frame.
+    public final static float STANDARD_BULLET_SPEED = 0.2f/*(1.75*TunnelerServer.FRAME_RATE/1000.0)*/; //pixels per millisecond. First number is pixels/frame.
     public final static int STANDARD_BULLET_LIFETIME = 3000;
     
     public static Image bulletImage = Toolkit.getDefaultToolkit().getImage("bullet1.png");

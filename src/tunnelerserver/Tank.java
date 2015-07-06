@@ -22,12 +22,10 @@ public class Tank
     
     private boolean isDead = false;
     
-    public final static double TANK_SPEED = (1.0*TunnelerServer.FRAME_RATE/1000.0); //pixels per millisecond. The first number is pixels/frame.
+    public final static double TANK_SPEED = 0.1/*(1.0*TunnelerServer.FRAME_RATE/1000.0)*/; //pixels per millisecond. The first number is pixels/frame.
     public final static double TANK_ROTATION_SPEED = Math.PI/1000; //radians per millisecond
     
     public static Image tankImg = Toolkit.getDefaultToolkit().getImage("resources/tank1.png");
-    
-    public static float imgScale = 6;
     
     private double x,y,xVel,yVel, speed = 0, rotation = 0, rotationSpeed = 0;
     
