@@ -14,10 +14,12 @@ import java.awt.Toolkit;
  */
 public class Bullet
 {
-    private String name;
+    private String name;    //pretty much the name of the image to use
+    private String source;  //playername source. Leave as null to denote "sourceless"
+    private int id;         //unique id for every bullet
     
-    public final static float STANDARD_BULLET_SPEED = 0.2f/*(1.75*TunnelerServer.FRAME_RATE/1000.0)*/; //pixels per millisecond. First number is pixels/frame.
-    public final static int STANDARD_BULLET_LIFETIME = 3000;
+    public final static float STANDARD_BULLET_SPEED = 0.3f/*(1.75*TunnelerServer.FRAME_RATE/1000.0)*/; //pixels per millisecond. First number is pixels/frame.
+    public final static int STANDARD_BULLET_LIFETIME = 20000;
     
     public static Image bulletImage = Toolkit.getDefaultToolkit().getImage("bullet1.png");
     
@@ -28,9 +30,11 @@ public class Bullet
     
     public boolean piercesWalls, piercesTanks;
     
-    public Bullet(String name, double x, double y, double speed, double rotation, int lifetime, int damage, boolean piercesWalls, boolean piercesTanks)
+    public Bullet(String name, String source, int id, double x, double y, double speed, double rotation, int lifetime, int damage, boolean piercesWalls, boolean piercesTanks)
     {
         this.name = name;
+        this.source = source;
+        this.id = id;
         this.x = x;
         this.y = y;
         this.rotation = rotation;
@@ -41,7 +45,17 @@ public class Bullet
         this.piercesWalls = piercesWalls;
     }
     
-    public boolean update(long deltaTime) //returns true if alive, false if dead
+    public String getSource()
+    {
+        return source;
+    }
+    
+    public int getID()
+    {
+        return id;
+    }
+    
+    public boolean update(double deltaTime) //returns true if alive, false if dead
     {
         double xVel = speed*Math.cos(rotation);
         double yVel = speed*Math.sin(rotation);
@@ -51,7 +65,7 @@ public class Bullet
         return lifetime >= currLifetime;
     }
     
-    public double[] mockUpdate(long deltaTime)
+    public double[] mockUpdate(double deltaTime)
     {
         double[] d = new double[3];
         double xVel = speed*Math.cos(rotation);

@@ -7,6 +7,7 @@ package tunnelerserver;
 
 import java.awt.Image;
 import java.awt.Toolkit;
+import java.util.HashMap;
 
 /**
  *
@@ -17,17 +18,21 @@ public class Tank
     private String name;
     
     private int team;
-    private int health;
-    public static final int MAX_HEALTH = 500;
+    private double health;
+    public static final int MAX_HEALTH = 150;
     
     private boolean isDead = false;
     
-    public final static double TANK_SPEED = 0.1/*(1.0*TunnelerServer.FRAME_RATE/1000.0)*/; //pixels per millisecond. The first number is pixels/frame.
+    public final static double TANK_SPEED = 0.07/*(1.0*TunnelerServer.FRAME_RATE/1000.0)*/; //pixels per millisecond. The first number is pixels/frame.
     public final static double TANK_ROTATION_SPEED = Math.PI/1000; //radians per millisecond
     
     public static Image tankImg = Toolkit.getDefaultToolkit().getImage("resources/tank1.png");
     
+    public HashMap<String, Boolean> visibility;
+    private HashMap<Integer, Boolean> visibilityB;
+    
     private double x,y,xVel,yVel, speed = 0, rotation = 0, rotationSpeed = 0;
+    public double initX, initY;
     
     public Tank(String name, float x, float y)
     {
@@ -36,7 +41,51 @@ public class Tank
         this.y = y;
         xVel = 0;
         yVel = 0;
-        health = 500;
+        health = MAX_HEALTH;
+        visibility = new HashMap<>();
+        visibilityB = new HashMap<>();
+    }
+    
+    /**
+     * 
+     * @param tName
+     * @param visible
+     * @return true if visibility has changed, false if not.
+     */
+    public boolean setVisibility(String tName, boolean visible)
+    {
+        if(!visibility.containsKey(tName) || visible != visibility.get(tName))
+        {
+            visibility.put(tName, visible);
+            return true;
+        }
+        return false;
+    }
+    
+    public boolean isVisible(String tName)
+    {
+        return visibility.get(tName);
+    }
+    
+    /**
+     * 
+     * @param bName
+     * @param visible
+     * @return true if visibility has changed, false if not.
+     */
+    public boolean setVisibilityB(int bName, boolean visible)
+    {
+        if(!visibilityB.containsKey(bName) || visible != visibilityB.get(bName))
+        {
+            visibilityB.put(bName, visible);
+            return true;
+        }
+        return false;
+    }
+    
+    public boolean isVisibleB(int bName)
+    {
+        return visibilityB.get(bName);
     }
     
     public void update(long deltaTime)
@@ -183,12 +232,12 @@ public class Tank
         isDead = dead;
     }
     
-    public int getHealth()
+    public double getHealth()
     {
         return health;
     }
     
-    public void setHealth(int newHealth)
+    public void setHealth(double newHealth)
     {
         health = newHealth;
     }

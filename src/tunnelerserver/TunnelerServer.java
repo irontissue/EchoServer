@@ -1,10 +1,9 @@
 package tunnelerserver;
 
 import java.awt.Point;
+import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
-import java.io.FileReader;
-import java.io.FileWriter;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
@@ -14,22 +13,42 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Stack;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import javax.imageio.ImageIO;
 
 public class TunnelerServer {
-    private static final int PORT = 8888;
-    public static final int FRAME_RATE = 30;
-    private static String[] keywords = {"LOGIN", "CREATE", "SUBMITNAME", "NAMEACCEPTED", "DISCONNECT", "GRID", "PHASE", "BULLET", "SYSTEMMESSAGE", "MESSAGE", "PUSHTANK"};
-    private static PrintWriter f;
-    private static HashSet<Handler> connections = new HashSet();
-    private static Room curr2PRoom, curr6PRoom, curr10PRoom;
+    private final int PORT;
+    private Thread listenerThread;
+    public final int FRAME_RATE = 30;
+    public boolean closed = false;
+    private String[] keywords = {"LOGIN", "CREATE", "SUBMITNAME", "NAMEACCEPTED", "DISCONNECT", "GRID", "PHASE", "BULLET", "SYSTEMMESSAGE", "MESSAGE", "PUSHTANK", "RECONNECT", "green", "blue", "Green", "Blue", "Admin"};
+    private HashSet<Handler> connections = new HashSet<>();
+    private Room curr2PRoom, curr6PRoom, curr10PRoom;
+    private boolean[][] digMask = new boolean[48][48];
     
-    public static void main(String[] args) throws IOException
+    public TunnelerServer(int port)
     {
+        PORT = port;
+        
         curr2PRoom = new Room(2);
         curr6PRoom = new Room(6);
         curr10PRoom = new Room(10);
+        
+        try {
+            BufferedImage b = ImageIO.read(new File("resources/dig2.png"));
+            for(int i = 0; i < b.getWidth(); i++)
+            {
+                for(int j = 0; j < b.getHeight(); j++)
+                {
+                    int rgb = b.getRGB(i, j);
+                    if(rgb != -1)
+                    {
+                        digMask[i][j] = true;
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
         
         /*new Thread(){
             @Override
@@ -48,16 +67,57 @@ public class TunnelerServer {
         }.start();*/ //Thread leakage test
         
         System.out.println("The tunneler server is running on port "+PORT+".");
-        try (ServerSocket listener = new ServerSocket(PORT)) {
-            while (true) {
-                Handler h = new Handler(listener.accept());
-                h.start();
-                connections.add(h);
+        listenerThread = new Thread() {
+            @Override
+            public void run()
+            {
+                try (ServerSocket listener = new ServerSocket(PORT)) {
+                    while (true) {
+                        Handler h = new Handler(listener.accept());
+                        h.start();
+                        connections.add(h);
+                    }
+                } catch (IOException ex) {
+                    ex.printStackTrace();
+                }
             }
-        }
+        };
+        listenerThread.start();
+        
+        new Thread() {
+            boolean stop = false;
+            @Override
+            public void run()
+            {
+                while(!stop)
+                {
+                    try {
+                        Thread.sleep(1000);
+                        if(closed && getSize() == 0)
+                        {
+                            listenerThread.interrupt();
+                            stop = true;
+                            System.out.println("Tunneler server on port " + PORT + " has been closed.");
+                        }
+                    } catch (InterruptedException ex) {
+                        ex.printStackTrace();
+                    }
+                }
+            }
+        }.start();
     }
     
-    public static void addToRoom(Handler h, Tank t, int roomID)
+    public int getPort()
+    {
+        return PORT;
+    }
+    
+    public int getSize()
+    {
+        return connections.size();
+    }
+    
+    public void addToRoom(Handler h, Tank t, int roomID)
     {
         if(roomID == 0)
         {
@@ -88,14 +148,15 @@ public class TunnelerServer {
         }
     }
     
-    private static class Room extends Thread{
+    private class Room extends Thread{
         private int phase = 0; //0 = tunneling, 1 = shooting
         private int roomSize;
         private int numTeams = 2;
         private int teamSetter = 0;
         private int[] numDeadOnTeams;
         
-        private int gameLength = 120; //seconds
+        private int gameLength; //seconds
+        private int currBulID = 0;
         
         private boolean gameEnded = false;
         private boolean phaseChanging = false;
@@ -105,11 +166,15 @@ public class TunnelerServer {
         private long gameStartTime; //seconds
         
         private float imgScale = 3;
-
-        public HashMap<String, Tank> tanks = new HashMap();
-        public HashMap<String, Handler> handlers = new HashMap(); //if only java default pkg had dictionaries like python!
         
-        private ArrayList<Bullet> bullets = new ArrayList();
+        private HashSet<Point> write = new HashSet<>();
+        private String writer = "";
+        private int numWriter = 0;
+
+        public HashMap<String, Tank> tanks = new HashMap<>();
+        public HashMap<String, Handler> handlers = new HashMap<>(); //if only java default pkg had dictionaries like python!
+        
+        private ArrayList<Bullet> bullets = new ArrayList<>();
 
         private int[][] grid; //values in grid represent tile type. 0 is nothing, 1 is diggable dirt, 2 is wall.
                                                     //If value is above 2, there is a bullet there with damage = value/100.
@@ -118,6 +183,7 @@ public class TunnelerServer {
         public Room(int size)
         {
             roomSize = size;
+            gameLength = 15*size/2+45;
             numDeadOnTeams = new int[numTeams];
             grid = new int[(int)(Math.pow(size,0.8)*919)+400][(int)(Math.pow(size,0.8)*804)+400]; //1v1: 800x700 per player. 5v5: 580x507 per player.
             for(int i = 0; i < grid.length; i++)
@@ -158,7 +224,7 @@ public class TunnelerServer {
             for(Handler h : handlers.values()) //update tanks to clients
                 for(Tank t : tanks.values())
                 {
-                    h.out.println("PUSHTANK/" + t.getName() + "/" + (int)t.getX() + "/" + (int)t.getY() + "/" + t.getXSpeed() + "/" + t.getYSpeed() + "/" + t.getRotation() + "/" + t.getTeam() + "/" + t.getHealth());
+                    h.out.println("PUSHTANK/" + t.getName() + "/" + (int)t.getX() + "/" + (int)t.getY() + "/" + t.getXSpeed() + "/" + t.getYSpeed() + "/" + t.getRotation() + "/" + t.getTeam() + "/" + (int)t.getHealth());
                 }
             start();
         }
@@ -182,14 +248,20 @@ public class TunnelerServer {
             t.setY(initY);
             h.initX = initX;
             h.initY = initY;
+            t.initX = initX;
+            t.initY = initY;
+            h.out.println("GAMESETTING/"+gameLength);
             handlers.put(h.tName, h);
             tanks.put(h.tName, t);
             String msg = " Waiting for " + (roomSize-handlers.size()) + " more players...";
             if(isFull())
                 msg = "";
+            String teamColor = "0,0,1";
+            if(h.team == 1)
+                teamColor = "0,1,0";
             for(Handler hh : handlers.values())
             {
-                hh.out.println("SYSTEMMESSAGE/" + t.getName() + " has joined the game." + msg);
+                hh.out.println("SYSTEMMESSAGE/" + t.getName() + "/" + teamColor + "/ has joined the game." + msg + "/0.75,0.75,0.75");
             }
             for(int i = initX-90; i < initX+90; i++)
                 for(int j = initY-100; j < initY+100; j++)
@@ -217,6 +289,7 @@ public class TunnelerServer {
 ;            //}else{ //for phase changing test
                 //phase = 0; Tank.imgScale = 3;
             //}
+            long timerr = System.currentTimeMillis();
             for(Handler h : handlers.values())
             {
                 h.out.println("PHASE/" + phase);
@@ -224,11 +297,21 @@ public class TunnelerServer {
                 tanks.get(h.tName).setYSpeed(0);
                 tanks.get(h.tName).setX(h.initX);
                 tanks.get(h.tName).setY(h.initY);
+                /*for(Point p : write)
+                    h.out.println("GC/" + p.x + "/" + p.y + "/0");*/
+                if(!writer.equals(""))
+                    h.out.println(writer);
             }
+            long sleepTime = System.currentTimeMillis()-timerr;
             try{
-                Thread.sleep(3000); //3sec for client to do fade in/out
+                Thread.sleep(3000-sleepTime); //3sec for client to do fade in/out
             } catch(Exception ex) {
                 ex.printStackTrace();
+            }
+            gameStartTime = System.currentTimeMillis()/1000;
+            for(Handler h : handlers.values())
+            {
+                h.out.println("GAMESETTING/"+gameLength);
             }
             phaseChanging = false;
         }
@@ -236,37 +319,38 @@ public class TunnelerServer {
         @Override
         public void run()
         {
+            gameStartTime = System.currentTimeMillis()/1000;
             try
             {
                 Thread.sleep(1500); //Wait 1.5 sec before countdown in case stuff is still happening
                 for(Handler h : handlers.values())
                 {
-                    h.out.println("SYSTEMMESSAGE/Game starts in 5");
+                    h.out.println("SYSTEMMESSAGE/Game starts in 5/0.75,0.75,0.75");
                 }
                 Thread.sleep(1000);
                 for(Handler h : handlers.values())
                 {
-                    h.out.println("SYSTEMMESSAGE/4");
+                    h.out.println("SYSTEMMESSAGE/4/0.75,0.75,0.75");
                 }
                 Thread.sleep(1000);
                 for(Handler h : handlers.values())
                 {
-                    h.out.println("SYSTEMMESSAGE/3");
+                    h.out.println("SYSTEMMESSAGE/3/0.75,0.75,0.75");
                 }
                 Thread.sleep(1000);
                 for(Handler h : handlers.values())
                 {
-                    h.out.println("SYSTEMMESSAGE/2");
+                    h.out.println("SYSTEMMESSAGE/2/0.75,0.75,0.75");
                 }
                 Thread.sleep(1000);
                 for(Handler h : handlers.values())
                 {
-                    h.out.println("SYSTEMMESSAGE/1");
+                    h.out.println("SYSTEMMESSAGE/1/0.75,0.75,0.75");
                 }
                 Thread.sleep(1000);
                 for(Handler h : handlers.values())
                 {
-                    h.out.println("SYSTEMMESSAGE/GO!");
+                    h.out.println("SYSTEMMESSAGE/GO!/0.75,0.75,0.75");
                 }
             } catch (Exception ex) {
                 ex.printStackTrace();
@@ -293,14 +377,13 @@ public class TunnelerServer {
                 {
                     if(phase == 0)
                     {
-                        gameStartTime = System.currentTimeMillis()/1000;
-                        gameLength = 180;
+                        gameLength = 15*roomSize/2+105;
                         changePhase();
                     }
                     else
                     {
                         gameEnded = true;
-                        HashSet<Integer> winningTeams = new HashSet();
+                        HashSet<Integer> winningTeams = new HashSet<Integer>();
                         for(int j = 0; j < numDeadOnTeams.length; j++)
                         {
                             if(numDeadOnTeams[j] < roomSize/2)
@@ -308,25 +391,34 @@ public class TunnelerServer {
                                 winningTeams.add(j);
                             }
                         }
-                        String msg = "FAILED CALC";
+                        String msg = "SYSTEMMESSAGE/The game is over. /0.75,0.75,0.75/";
                         if(winningTeams.size() > 1)
                         {
-                            msg = "There is a tie between teams ";
-                            for(int team : winningTeams)
-                                msg += team + ",";
-                            msg = msg.substring(0, msg.length()-1);
-                            msg += ".";
+                            msg += "There is a tie between ";
+                            for(int team : winningTeams) {
+                                if(team == 0) {
+                                    msg += "/0.75,0.75,0.75/blue/0,0,1/ team and ";
+                                }
+                                else if(team == 1) {
+                                    msg += "/0.75,0.75,0.75/green/0,1,0/ team and ";
+                                }
+                            }
+                            msg = msg.substring(0, msg.length()-5);
+                            msg += "./0.75,0.75,0.75";
                         }
                         else
                         {
-                            for(int team : winningTeams)
-                                msg = "Team " + team + " has won!";
+                            for(int team : winningTeams) {
+                                if(team == 1)
+                                    msg += "Green/0,1,0/ team has won!/0.75,0.75,0.75";
+                                else
+                                    msg += "Blue/0,0,1/ team has won!/0.75,0.75,0.75";
+                            }
                         }
                         synchronized(handlers.values()){
                             for(Handler h : handlers.values())
                             {
-                                h.out.println("SYSTEMMESSAGE/The game is over. " + msg);
-                                //h.out.println("SYSTEMMESSAGE/"+msg);
+                                h.out.println(msg);
                             }
                         }
                     }
@@ -338,8 +430,8 @@ public class TunnelerServer {
                         gameEnded = true;
                         interrupt();
                     }
-                    Stack<Point> bucket = new Stack();
-                    HashSet<Tank> deadTanks = new HashSet();
+                    Stack<Point> bucket = new Stack<Point>();
+                    HashSet<Tank> deadTanks = new HashSet<Tank>();
                     synchronized(bullets) //bullets loop
                     {
                         int sz = bullets.size();
@@ -352,7 +444,11 @@ public class TunnelerServer {
                                 Bullet b = bullets.get(u);
                                 grid[(int)b.getX()][(int)b.getY()] -= b.getDamage()*100;
                                 double[] dat = b.mockUpdate(System.currentTimeMillis()-frameTimer);
-                                int gridType = grid[(int)dat[0]][(int)dat[1]]%100;
+                                Integer[] gridTypes = new Integer[(int)Math.sqrt(Math.pow(b.getX()-dat[0],2)+Math.pow(b.getY()-dat[1],2))];
+                                for(int i = 0; i < gridTypes.length; i++)
+                                {
+                                    gridTypes[i] = grid[(int)(b.getX()+Math.cos(b.getRotation())*i)][(int)(b.getY()+Math.sin(b.getRotation())*i)]%100;
+                                }
                                 /*
                                 2 cases for bullet removal tested here. The third one is in the tanks loop below.
                                 The three cases are 1) bullet hits wall and it doesn't pierce
@@ -360,34 +456,49 @@ public class TunnelerServer {
                                                     3) bullet hits tank and it doesn't pierce
                                 Cases 1 and 2 are tested here.
                                 */
-                                if(gridType != 0 && !b.piercesWalls)
+                                /*int type = grid[(int)b.getX()][(int)b.getY()]%100; //these three lines make the bullet destroy tiles
+                                if(type == 1)
+                                    grid[(int)b.getX()][(int)b.getY()] -= type;*/
+                                boolean go = false;
+                                for(int ii : gridTypes)
+                                {
+                                    if(ii != 0) {
+                                        go = true;
+                                        break;
+                                    }
+                                }
+                                if(go && !b.piercesWalls)
                                 {
                                     bullets.remove(b);
                                     u--;
-                                    if(b.getName().split(" ").length > 1)
+                                    if(b.getSource() != null)
                                     {
-                                        handlers.get(b.getName().split(" ", 2)[1]).numBullets-=1;
+                                        handlers.get(b.getSource()).numBullets-=1;
                                     }
+                                    while(grid[(int)b.getX()][(int)b.getY()] == 0)
+                                        b.update(1/b.getSpeed());
                                     for(int i = 0; i < 4; i++)
                                     {
-                                        double randSpd = Math.random()*2*TunnelerServer.FRAME_RATE/1000.0;
-                                        double randRotate = Math.random()*Math.PI/2+(b.getRotation()-Math.PI-Math.PI/4);
-                                        bullets.add(new Bullet("bullet2", dat[0], dat[1], randSpd, randRotate, 300, 5, true, true));
-                                        grid[(int)dat[0]][(int)dat[1]] += b.getDamage()*10; //ricochet bullets do approximately 1/10 dmg. Any bullets < 10 damage will have ricochet that does 0 damage.
+                                        double randSpd = Math.random()*0.1;
+                                        double spreadAng = Math.PI*3/5;
+                                        double randRotate = Math.random()*spreadAng+(b.getRotation()-Math.PI-spreadAng/2);
+                                        bullets.add(new Bullet("bullet2", null, currBulID, b.getX(), b.getY(), randSpd, randRotate, 300, 5, true, false));
+                                        grid[(int)dat[0]][(int)dat[1]] += b.getDamage()*50; //ricochet bullets do approximately 1/2 dmg. Any bullets < 10 damage will have ricochet that does 0 damage.
                                         synchronized(handlers.values()){
                                             for(Handler h : handlers.values()){
-                                                h.out.println("BULLET/bullet2/" + dat[0] + "/" + dat[1] + "/" + randSpd + "/" + randRotate + "/" + 300 + "/" + 5 + "/true/true");
+                                                h.out.println("BULLET/bullet2/null/" + currBulID + "/" + b.getX() + "/" + b.getY() + "/" + randSpd + "/" + randRotate + "/" + 300 + "/" + 5 + "/true/false");
                                             }
                                         }
+                                        ++currBulID;
                                     }
                                 }
                                 else if(dat[2] >= b.getLifetime())
                                 {
                                     bullets.remove(b);
                                     u--;
-                                    if(b.getName().split(" ").length > 1)
+                                    if(b.getSource() != null)
                                     {
-                                        handlers.get(b.getName().split(" ", 2)[1]).numBullets-=1;
+                                        handlers.get(b.getSource()).numBullets-=1;
                                     }
                                 }
                                 else
@@ -403,6 +514,25 @@ public class TunnelerServer {
                         {
                             Handler h = handlers.get(s);
                             Tank t = tanks.get(s);
+                            String toWriteB = "";
+                            for(int i = 0; i < bullets.size(); i++)
+                            {
+                                Bullet b = bullets.get(i);
+                                if(isVisible(t.getX(), t.getY(), b.getX(), b.getY()))
+                                {
+                                    if(t.setVisibilityB(b.getID(), true))
+                                        toWriteB += "VISB/" + b.getID() + "/true";
+                                }
+                                else
+                                {
+                                    if(t.setVisibilityB(b.getID(), false))
+                                        toWriteB += "VISB/" + b.getID() + "/false";
+                                }
+                            }
+                            if(!toWriteB.equals(""))
+                            {
+                                h.out.println(toWriteB);
+                            }
                             if(t != null && !t.isDead())
                             {
                                 try
@@ -417,7 +547,7 @@ public class TunnelerServer {
                                     //double corner3y = dat[1]+Tank.tankImg.getWidth(null)*Tank.imgScale*Math.sin(angle)/2 - Tank.tankImg.getHeight(null)*Tank.imgScale*Math.cos(angle)/2;
                                     //double corner4x = dat[0]-Tank.tankImg.getWidth(null)*Tank.imgScale*Math.cos(angle)/2 + Tank.tankImg.getHeight(null)*Tank.imgScale*Math.sin(angle)/2;
                                     //double corner4y = dat[1]-Tank.tankImg.getWidth(null)*Tank.imgScale*Math.sin(angle)/2 - Tank.tankImg.getHeight(null)*Tank.imgScale*Math.cos(angle)/2;
-                                    int radius = (int)(imgScale*Tank.tankImg.getWidth(null)/2+3);
+                                    int radius = 24;//(int)(imgScale*Tank.tankImg.getWidth(null)/2+3);
                                     double incAdjustment = 1;
                                     double outXInc = Math.cos(angle)*incAdjustment, outYInc = Math.sin(angle)*incAdjustment, inXInc = Math.sin(angle)*incAdjustment, inYInc=-Math.cos(angle)*incAdjustment;
                                     double widthCounter = 0;
@@ -425,28 +555,47 @@ public class TunnelerServer {
                                     double numUnits = 0; //efficiency counter. Total # of sends to all clients/pixel processing count.
                                     if(phase == 0) //digging a circle around the tank. println all chords in the circle of 1 pixel width.
                                     {
-                                        Stack<Point> tempBucket = new Stack();
-                                        for(int startX = (int)(dat[0]-radius); startX < (int)(dat[0]+radius+1); startX++)
+                                        if(t.getHealth() <= 0)
                                         {
-                                            double dist = Math.sqrt(radius*radius-(dat[0]-startX)*(dat[0]-startX));
-                                            for(int startY = (int)(dat[1]-dist); startY < (int)(dat[1]+dist); startY++)
+                                            deadTanks.add(t);
+                                            t.setDead(true);
+                                            canMove = false;
+                                        }
+                                        else if(t.getHealth() > 10)
+                                        {
+                                            Stack<Point> tempBucket = new Stack<>();
+                                            for(int startX = (int)(dat[0]-radius); startX < (int)(dat[0]+radius); startX++)
                                             {
-                                                int type = grid[startX][startY]%100;
-                                                if(type == 1)
+                                                for(int startY = (int)(dat[1]-radius); startY < (int)(dat[1]+radius); startY++)
                                                 {
-                                                    tempBucket.push(new Point(startX, startY));
-                                                    numUnits++;
-                                                }
-                                                else if(type == 2)
-                                                {
-                                                    canMove = false;
-                                                    tempBucket.clear();
-                                                    startX = (int)(dat[0]+radius+1);
-                                                    break;
+                                                    if(digMask[(int)(startX+radius-dat[0])][(int)(startY+radius-dat[1])])
+                                                    {
+                                                        int type = grid[startX][startY]%100;
+                                                        if(type == 1)
+                                                        {
+                                                            tempBucket.push(new Point(startX, startY));
+                                                            numUnits++;
+                                                        }
+                                                        else if(type == 2)
+                                                        {
+                                                            canMove = false;
+                                                            tempBucket.clear();
+                                                            startX = (int)(dat[0]+radius+1);
+                                                            break;
+                                                        }
+                                                    }
                                                 }
                                             }
+                                            if(canMove && tempBucket.size() > 25) { //higher num means less precise map to be sent to clients
+                                                //write.add(new Point((int)dat[0], (int)dat[1]));
+                                                writer += "GC/" + (int)dat[0] + "/" + (int)dat[1];
+                                                /*for(Handler hh : handlers.values())
+                                                    hh.out.println("GCUNIT/" + (int)dat[0] + "/" + (int)dat[1]);*/
+                                                numWriter += 1;
+                                                t.setHealth(t.getHealth()-(System.currentTimeMillis()-frameTimer)*0.007);
+                                            }
+                                            bucket.addAll(tempBucket);
                                         }
-                                        bucket.addAll(tempBucket);
                                     }
                                     else //can't dig, just moving
                                     {
@@ -469,19 +618,21 @@ public class TunnelerServer {
                                                         {
                                                             bullets.remove(b);
                                                             i--;
-                                                            handlers.get(b.getName().split(" ",2)[1]).numBullets-=1;
+                                                            if(b.getSource() != null)
+                                                                handlers.get(b.getSource()).numBullets-=1;
                                                             break;
                                                         }
                                                     }
+                                                    System.out.println(t.getName() + " damaged for " + dmg + " hp!");
                                                     t.setHealth(t.getHealth()-dmg);
-                                                    if(t.getHealth() <= 0)
-                                                    {
-                                                        deadTanks.add(t);
-                                                        t.setDead(true);
-                                                        canMove = false;
-                                                        widthCounter = imgScale*Tank.tankImg.getWidth(null)/incAdjustment+1;
-                                                        break;
-                                                    }
+                                                }
+                                                if(t.getHealth() <= 0)
+                                                {
+                                                    deadTanks.add(t);
+                                                    t.setDead(true);
+                                                    canMove = false;
+                                                    widthCounter = imgScale*Tank.tankImg.getWidth(null)/incAdjustment+1;
+                                                    break;
                                                 }
                                                 if(gridType != 0)
                                                 {
@@ -530,15 +681,44 @@ public class TunnelerServer {
                                 } catch(Exception exc) {
                                     exc.printStackTrace();
                                 }
-                                if(System.currentTimeMillis()-pushTimer > 1000) //comment out this line to have absolute updating every frame (high cost). For now it updates every second for precision on clients. Speed of tanks is updated every keystroke change.
-                                    for(String ss : handlers.keySet())
-                                    {
-                                        Handler hh = handlers.get(ss);
-                                        hh.out.println("PUSHTANK/" + t.getName() + "/" + (int)t.getX() + "/" + (int)t.getY() + "/" + t.getXSpeed() + "/" + t.getYSpeed() + "/" + t.getRotation() + "/" + t.getTeam() + "/" + t.getHealth());
-                                    }
+                                if(Math.abs(t.getX()-t.initX) < 85 && Math.abs(t.getY()-t.initY) < 95 && t.getHealth() < Tank.MAX_HEALTH)
+                                {
+                                    t.setHealth(t.getHealth()+(System.currentTimeMillis()-frameTimer)*0.05);
+                                }make it so same team bases heal same team tanks!
                             }
                         }
                     }
+                    
+                    for(String s : handlers.keySet()) //one more tanks loop for writing stuff after updates
+                    {
+                        Handler h = handlers.get(s);
+                        Tank t = tanks.get(s);
+                        String toWrite = "";
+                        for(String ss : handlers.keySet())
+                        {
+                            if(!ss.equals(s))
+                            {
+                                Tank tt = tanks.get(ss);
+                                if(isVisible(t.getX(), t.getY(), tt.getX(), tt.getY()))
+                                {
+                                    if(t.setVisibility(ss, true))
+                                        toWrite += "VIS/" + ss + "/true";
+                                }
+                                else
+                                {
+                                    if(t.setVisibility(ss, false))
+                                        toWrite += "VIS/" + ss + "/false";
+                                }
+                            }
+                        }
+                        if(!toWrite.equals(""))
+                            h.out.println(toWrite);
+                        if(writer.length() > 1000)
+                            h.out.println(writer);
+                    }
+                    if(writer.length() > 1000)
+                        writer = "";
+                    
                     for(Point p : bucket)
                     {
                         grid[(int)p.getX()][(int)p.getY()] /= 100;
@@ -553,24 +733,86 @@ public class TunnelerServer {
                         numDeadOnTeams[t.getTeam()] += 1;
                         for(Handler h : handlers.values())
                         {
-                            h.out.println("SYSTEMMESSAGE/" + t.getName() + " has died.");
+                            String clr = "/0,0,1/";
+                            if(t.getTeam() == 1)
+                                clr = "/0,1,0/";
+                            h.out.println("SYSTEMMESSAGE/" + t.getName() + clr + " has died./1,0,0");
                         }
                     }
                     for(int num : numDeadOnTeams)
                         if(num == roomSize/2)
                         {
-                            gameStartTime = System.currentTimeMillis()/1000-200;
+                            gameStartTime = System.currentTimeMillis()/1000-2000;
                         }
                     frameTimer = System.currentTimeMillis();
-                    if(System.currentTimeMillis()-pushTimer > 1000)
+                    if(System.currentTimeMillis()-pushTimer > 500)
+                    {
                         pushTimer = System.currentTimeMillis();
+                        String writerino = "";
+                        for(Tank t : tanks.values())
+                            writerino += "PUSHTANK/" + t.getName() + "/" + (int)t.getX() + "/" + (int)t.getY() + "/" + t.getXSpeed() + "/" + t.getYSpeed() + "/" + t.getRotation() + "/" + t.getTeam() + "/" + (int)t.getHealth();
+                        for(Handler hh : handlers.values())
+                        {
+                            hh.out.println(writerino);
+                        }
+                    }
                     //System.out.println(Thread.activeCount());
                 }
             }
         }
+        
+        public boolean isVisible(double x, double y, double x1, double y1)
+        {
+            double startX = x, startY = y, endX = x1, endY = y1;
+            double theta = Math.atan2(endX-startX, endY-startY);
+            theta -= Math.PI/2;
+            theta = -theta;
+            double xInc = Math.cos(theta);
+            double yInc = Math.sin(theta);
+            //mg.batch.draw(mg.sprites.get("shadow"), (float)tanks.get(mg.myTankName).getX(), (float)tanks.get(mg.myTankName).getY(), (float)(x1-tanks.get(mg.myTankName).getX()), (float)(y1-tanks.get(mg.myTankName).getY()));
+            while(visibilityHelper(startX, startY, endX, endY, xInc, yInc))
+            {
+                int type = grid[(int)startX][(int)startY]%100;
+                if(type != 0)
+                {
+                    return false;
+                }
+                startY += yInc;
+                startX += xInc;
+            }
+            return true;
+        }
+
+        public boolean visibilityHelper(double sX, double sY, double eX, double eY, double xInc, double yInc)
+        {
+            if(xInc > 0) {
+                if(yInc > 0) {
+                    if(sX < eX || sY < eY) {
+                        return true;
+                    }
+                }
+                else {
+                    if(sX < eX || sY > eY) {
+                        return true;
+                    }
+                }
+            } else {
+                if(yInc > 0) {
+                    if(sX > eX || sY < eY) {
+                        return true;
+                    }
+                }
+                else {
+                    if(sX > eX || sY > eY) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
     }
     
-    private static class Handler extends Thread {
+    private class Handler extends Thread {
         public String tName;
         public int team;
         private int numBullets=0;
@@ -611,6 +853,7 @@ public class TunnelerServer {
         @Override
         public void run() {
             try{
+                out.println(hashCode());
                 /*while(resetting)
                     try {
                         Thread.sleep(10);
@@ -624,10 +867,12 @@ public class TunnelerServer {
                     while (!nameSet) {
                         String myName = in.readLine();
                         String[] special = myName.split("/");
-                        if(special.length > 1)
+                        if(special.length > 1 && special[1].equals(""+hashCode()))
+                        {
                             myName = special[0];
+                        }
                         boolean nameIsKeyword = false;
-                        if (myName == null || myName.equals("") || myName.equals("null") || myName.contains("/") || nameIsKeyword) {
+                        if (myName == null || myName.equals("") || myName.equals("null") || myName.contains("/") || myName.contains("'") || nameIsKeyword) {
                             out.println("SUBMITNAME/0");
                         }
                         else
@@ -638,6 +883,10 @@ public class TunnelerServer {
                             if(nameIsKeyword) {
                                 out.println("SUBMITNAME/0");
                             } else {
+                                if(myName.equals("$)n2*$@n4208nn97g@$"))
+                                {
+                                    myName = "Admin";
+                                }
                                 boolean taken = false;
                                 synchronized(connections) {
                                     for(Handler h : connections)
@@ -720,7 +969,10 @@ public class TunnelerServer {
                     } catch (Exception ex) {
                         ex.printStackTrace();
                     }
-                    out.println("MESSAGE/You are on team " + team + ".");
+                    if(team == 1)
+                        out.println("MESSAGE/You are on /1,1,1/green/0,1,0/ team./1,1,1");
+                    else if(team == 0)
+                        out.println("MESSAGE/You are on /1,1,1/blue/0,0,1/ team./1,1,1");
                     while (!myRoom.gameEnded) {
                         String input = in.readLine();
                         if (input == null) {
@@ -745,6 +997,8 @@ public class TunnelerServer {
                             }
                             else */if(splitty[0].equals("KEYSTROKE"))
                             {
+                                double oldXSpeed = t.getXSpeed();
+                                double oldYSpeed = t.getYSpeed();
                                 if(t.getYSpeed() != 0 && t.getXSpeed() != 0)
                                 {
                                     t.setXSpeed(t.getXSpeed()*Math.sqrt(2));
@@ -773,16 +1027,19 @@ public class TunnelerServer {
                                             //t.setSpeed(t.getSpeed()-Tank.TANK_SPEED);
                                             break;
                                         case "SHOOT":
-                                            if(myRoom.phase == 1 && numBullets < 5)
+                                            if(myRoom.phase == 1 && numBullets < 5 && t.getHealth() > 5)
                                             {
-                                                myRoom.bullets.add(new Bullet("bullet1 "+tName, t.getX()+Math.cos(t.getRotation())*12, t.getY()+Math.sin(t.getRotation())*12, Bullet.STANDARD_BULLET_SPEED, t.getRotation(), Bullet.STANDARD_BULLET_LIFETIME, 25, false, false));
+                                                int dmg = 25;
+                                                t.setHealth(t.getHealth()-5);
+                                                myRoom.bullets.add(new Bullet("bullet1", tName, myRoom.currBulID, t.getX()+Math.cos(t.getRotation())*15, t.getY()+Math.sin(t.getRotation())*15, Bullet.STANDARD_BULLET_SPEED, t.getRotation(), Bullet.STANDARD_BULLET_LIFETIME, dmg, false, false));
                                                 numBullets += 1;
-                                                myRoom.grid[(int)(t.getX()+Math.cos(t.getRotation())*15)][(int)(t.getY()+Math.sin(t.getRotation())*15)] += 2500;
+                                                myRoom.grid[(int)(t.getX()+Math.cos(t.getRotation())*15)][(int)(t.getY()+Math.sin(t.getRotation())*15)] += dmg*100;
                                                 synchronized(myRoom.handlers.values()){
                                                     for(Handler h : myRoom.handlers.values()){
-                                                        h.out.println("BULLET/bullet1 " +tName+ "/" + (t.getX()+Math.cos(t.getRotation())*15) + "/" + (t.getY()+Math.sin(t.getRotation())*15) + "/" + Bullet.STANDARD_BULLET_SPEED + "/" + t.getRotation() + "/" + Bullet.STANDARD_BULLET_LIFETIME + "/" + 25 + "/false/false");
+                                                        h.out.println("BULLET/bullet1/" +tName+ "/" + myRoom.currBulID + "/" + (t.getX()+Math.cos(t.getRotation())*15) + "/" + (t.getY()+Math.sin(t.getRotation())*15) + "/" + Bullet.STANDARD_BULLET_SPEED + "/" + t.getRotation() + "/" + Bullet.STANDARD_BULLET_LIFETIME + "/" + dmg + "/false/false");
                                                     }
                                                 }
+                                                ++myRoom.currBulID;
                                             }
                                             break;
                                         /*case "Q": //testing for phase change bugs
@@ -794,10 +1051,11 @@ public class TunnelerServer {
                                     t.setXSpeed(t.getXSpeed()/Math.sqrt(2));
                                     t.setYSpeed(t.getYSpeed()/Math.sqrt(2));
                                 }
-                                for(Handler hh : myRoom.handlers.values())
-                                {
-                                    hh.out.println("SPEEDUPDATE/" + t.getName() + "/" + t.getXSpeed() + "/" + t.getYSpeed());
-                                }
+                                if(oldXSpeed != t.getXSpeed() || oldYSpeed != t.getYSpeed())
+                                    for(Handler hh : myRoom.handlers.values())
+                                    {
+                                        hh.out.println("SPEEDUPDATE/" + t.getName() + "/" + t.getXSpeed() + "/" + t.getYSpeed());
+                                    }
                             }
                         }
                     }
@@ -809,11 +1067,18 @@ public class TunnelerServer {
             } finally {
                 if (tName != null) {
                     if(myRoom != null) {
-                        myRoom.handlers.remove(tName);
-                        myRoom.tanks.remove(tName);
-                        for(Handler h : myRoom.handlers.values())
+                        if(myRoom.gameStartTime == 0)
                         {
-                            h.out.println("DISCONNECT/" + tName);
+                            myRoom.handlers.remove(tName);
+                            myRoom.tanks.remove(tName);
+                        }
+                        else
+                        {
+                            myRoom.tanks.get(tName).setHealth(-1);
+                            for(Handler h : myRoom.handlers.values())
+                            {
+                                h.out.println("DISCONNECT/" + tName);
+                            }
                         }
                     }
                     Thread.currentThread().interrupt();
